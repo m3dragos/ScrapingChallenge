@@ -18,11 +18,10 @@ namespace PureMenuScraper.Controllers
             _menuScrapper = menuScrapper;
         }
 
-        [HttpGet]
+        [HttpPost]
         public IEnumerable<MenuDishItem> Get(string menuUrl)
         {
-            //TODO: Convert to POST, use url
-            var items = _menuScrapper.GetAllDishes("https://www.pure.co.uk/menus/breakfast");
+            var items = _menuScrapper.GetAllDishes(menuUrl);
 
             return items;
         }

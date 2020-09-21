@@ -40,23 +40,18 @@ namespace PureMenuScraper.Scraping
 
         private void CheckAndDismissPopup(IWebDriver driver)
         {
-            try
+            var popupCloseButton = RecoverableScrape(() => driver.FindElement(By.CssSelector(".popmake-close")), "MailingPopup");
+            if (popupCloseButton != null)
             {
-                var popupCloseButton = driver.FindElement(By.CssSelector(".popmake-close"));
                 popupCloseButton.Click();
-            }
-            catch (NoSuchElementException)
-            {
-                //popup not found, no need to do anything
-                return;
             }
         }
 
         private IEnumerable<string> GetSubmenuUrls(IWebDriver driver)
         {
-            var menusLink = driver.FindElement(By.CssSelector("nav a[href='/menus/']"));
-            var menuContainer = menusLink.FindElement(By.XPath("./.."));
-            var menus = menuContainer.FindElements(By.CssSelector(".submenu > li > a"));
+            var menusLink = Scrape(() => driver.FindElement(By.CssSelector("nav a[href='/menus/']")));
+            var menuContainer = Scrape(() => menusLink.FindElement(By.XPath("./..")));
+            var menus = Scrape(() => menuContainer.FindElements(By.CssSelector(".submenu > li > a")));
 
             return menus.Select(m => m.GetAttribute("href")).ToList();
         }
@@ -65,28 +60,36 @@ namespace PureMenuScraper.Scraping
         {
             var results = new List<MenuDishItem>();
             var itemLinkMapping = new List<KeyValuePair<string, MenuDishItem>>();
+            var cultureInfo = new CultureInfo("en-GB", false);
 
             driver.Navigate().GoToUrl(url);
 
-            var menuContainer = driver.FindElement(By.CssSelector("body > main > section"));
-            var menuTitle = menuContainer.FindElement(By.CssSelector(".menu-header > h1, h2")).Text;
-            var menuDescription = menuContainer.FindElement(By.CssSelector(".menu-header > p")).Text;
-            var sections = menuContainer.FindElements(By.CssSelector(".menu-title > a"));
+            // Scraping the menu title and description
+            var menuContainer = Scrape(() => driver.FindElement(By.CssSelector("body > main > section")));
+            var menuTitleElement = RecoverableScrape(() => menuContainer.FindElement(By.CssSelector(".menu-header > h1, h2")), nameof(MenuDishItem.MenuTitle));
+            var menuDescriptionElement = RecoverableScrape(() => menuContainer.FindElement(By.CssSelector(".menu-header > p")), nameof(MenuDishItem.MenuDescription));
+            
+            var menuTitle = menuTitleElement?.Text ?? string.Empty; //Final value: MenuTitle
+            var menuDescription = menuDescriptionElement?.Text ?? string.Empty; //Final value: MenuDescription
 
+            // Multiple sections per menu
+            var sections = Scrape(() => menuContainer.FindElements(By.CssSelector(".menu-title > a")));
             foreach (var sectionHeader in sections)
             {
-                var cultureInfo = new CultureInfo("en-GB", false);
-                var titleText = sectionHeader.FindElement(By.CssSelector("span")).Text;
-                var sectionTitle = cultureInfo.TextInfo.ToTitleCase(titleText.ToLower(cultureInfo));
+                var titleElement = RecoverableScrape(() => sectionHeader.FindElement(By.CssSelector("span")), nameof(MenuDishItem.MenuSectionTitle));
+                var titleText = titleElement?.Text ?? string.Empty; 
+                var sectionTitle = cultureInfo.TextInfo.ToTitleCase(titleText.ToLower(cultureInfo)); //Final value: MenuSectionTitle
 
                 var sectionId = new Uri(sectionHeader.GetAttribute("href")).Fragment;
-                var sectionContainer = menuContainer.FindElement(By.CssSelector(sectionId)); //'sectionId' already includes the '#' character
-                var sectionItems = sectionContainer.FindElements(By.CssSelector(".menu-item > a"));
+                var sectionContainer = Scrape(() => menuContainer.FindElement(By.CssSelector(sectionId))); //'sectionId' already includes the '#' character
+                var sectionItems = Scrape(() => sectionContainer.FindElements(By.CssSelector(".menu-item > a")));
 
+                // Multiple items per section
                 foreach (var sectionItem in sectionItems)
                 {
-                    var itemLink = sectionItem.GetAttribute("href");
-                    var itemTitle = sectionItem.GetAttribute("title");
+                    var itemLink = RecoverableScrape(() => sectionItem.GetAttribute("href"), "DishUri");
+                    var itemTitle = RecoverableScrape(() => sectionItem.GetAttribute("title"), nameof(MenuDishItem.DishName)) ?? string.Empty;
+
                     var resultItem = new MenuDishItem
                     {
                         MenuTitle = menuTitle,
@@ -99,19 +102,55 @@ namespace PureMenuScraper.Scraping
 
                     // Item description is on the product page. Save link for later, we will scrape all of them at once
                     //to avoid refreshing this page, which we are not done with yet.
-                    itemLinkMapping.Add(new KeyValuePair<string, MenuDishItem>(itemLink, resultItem));
+                    if (itemLink != null)
+                    {
+                        itemLinkMapping.Add(new KeyValuePair<string, MenuDishItem>(itemLink, resultItem));
+                    }
                 }
             }
 
+            // Scrape item descriptions from their own pages
             foreach (var kvp in itemLinkMapping)
             {
                 driver.Navigate().GoToUrl(kvp.Key);
 
-                var description = driver.FindElement(By.CssSelector(".menu-item-details > div:nth-child(3) > :first-child")).Text;
-                kvp.Value.DishDescription = description;
+                var descriptionElement = RecoverableScrape(() => driver.FindElement(By.CssSelector(".menu-item-details > div:nth-child(3) > :first-child")), nameof(MenuDishItem.DishDescription));
+                kvp.Value.DishDescription = descriptionElement?.Text ?? string.Empty;
+
+                _logger.LogInformation($"Scraping complete for dish \"{kvp.Value.DishName}\".");
             }
 
             return results;
+        }
+
+        private T Scrape<T>(Func<T> func) where T : class
+        {
+            try
+            {
+                return func.Invoke();
+            }
+            catch (NoSuchElementException e)
+            {
+                //TODO: include caller method/parameters in log
+                _logger.LogWarning($"Error while scraping, aborting.");
+
+                throw new Exception("Scraping exception", e);
+            }
+        }
+
+        private T RecoverableScrape<T>(Func<T> func, string fieldName) where T : class
+        {
+            try
+            {
+                return func.Invoke();
+            }
+            catch (NoSuchElementException)
+            {
+                //TODO: include caller method/parameters in log
+                _logger.LogWarning($"Error while reading {fieldName}, continuing and leaving it empty.");
+
+                return null;
+            }
         }
     }
 }
