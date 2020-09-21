@@ -1,9 +1,7 @@
-﻿using System;
+﻿using Microsoft.AspNetCore.Mvc;
+using Microsoft.Extensions.Logging;
+using PureMenuScraper.Scraping;
 using System.Collections.Generic;
-using System.Linq;
-using System.Threading.Tasks;
-using Microsoft.AspNetCore.Http;
-using Microsoft.AspNetCore.Mvc;
 
 namespace PureMenuScraper.Controllers
 {
@@ -11,10 +9,22 @@ namespace PureMenuScraper.Controllers
     [Route("[controller]")]
     public class ScrapeController : ControllerBase
     {
-        [HttpGet]
-        public string Get()
+        private readonly ILogger _logger;
+        private readonly IMenuScraper _menuScrapper;
+
+        public ScrapeController(ILogger<ScrapeController> logger, IMenuScraper menuScrapper)
         {
-            return "It works!";
+            _logger = logger;
+            _menuScrapper = menuScrapper;
+        }
+
+        [HttpGet]
+        public IEnumerable<MenuDishItem> Get(string menuUrl)
+        {
+            //TODO: Convert to POST, use url
+            var items = _menuScrapper.GetAllDishes("https://www.pure.co.uk/menus/breakfast");
+
+            return items;
         }
     }
 }
